@@ -19,13 +19,20 @@ const mapTypeToText = {
 
 
 class ArangoChair extends EventEmitter {
-    constructor(adbUrl) {
+    constructor(adbUrl, auth) {
         super();
         adbUrl = url.parse(adbUrl);
-        this.req = new (adbUrl.protocol === 'https:'? https : http)({
+        let options = {
             hostname:adbUrl.hostname,
             port:adbUrl.port
-        });
+        };
+        if (auth) {
+          options.headers = {
+            'Authorization': auth
+          };
+        }
+
+        this.req = new (adbUrl.protocol === 'https:'? https : http)(options);
 
         const db = '/' === adbUrl.pathname ? '/_system' : adbUrl.pathname;
 
