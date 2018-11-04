@@ -21,20 +21,20 @@ const mapTypeToText = {
 class ArangoChair extends EventEmitter {
     constructor(adbUrl, auth) {
         super();
-        adbUrl = url.parse(adbUrl);
-        let options = {
-            hostname:adbUrl.hostname,
+        this.adbUrl = url.parse(adbUrl);
+        this.options = {
+            hostname:this.adbUrl.hostname,
             port:adbUrl.port
         };
         if (auth) {
-          options.headers = {
+            this.options.headers = {
             'Authorization': auth
           };
         }
 
-        this.req = new (adbUrl.protocol === 'https:'? https : http)(options);
+        this.req = new (this.adbUrl.protocol === 'https:'? https : http)(this.options);
 
-        const db = '/' === adbUrl.pathname ? '/_system' : adbUrl.pathname;
+        const db = '/' === this.adbUrl.pathname ? '/_system' : this.adbUrl.pathname;
 
         this._loggerStatePath  = `/_db${db}/_api/replication/logger-state`;
         this._loggerFollowPath = `/_db${db}/_api/replication/logger-follow`;
@@ -53,7 +53,16 @@ class ArangoChair extends EventEmitter {
     }
 
     _startLoggerState() {
+        if (this.req == null) {
+            this.req = new (this.adbUrl.protocol === 'https:'? https : http)(this.options);
+        }
         this.req.get({path:this._loggerStatePath}, (status, headers, body) => {
+
+            if (status === 0) {
+                this.stop();
+                this._startLoggerState();
+                return;
+            }
             if (200 !== status) {
                 this.emit('error', new Error('E_LOGGERSTATE'), status, headers, body);
                 this.stop();
@@ -78,6 +87,7 @@ class ArangoChair extends EventEmitter {
             const cnameStartBuffer      = Buffer.from('cname":"');
             const keyStartBuffer        = Buffer.from('_key":"');
             const commaDoubleTickBuffer = Buffer.from(',"');
+            const tidBuffer = Buffer.from('tid":');
 
             const txns = new Map();
 
@@ -100,13 +110,16 @@ class ArangoChair extends EventEmitter {
 
                 if (0 !== keys.size && !events.has(key)) return;
 
-                this.emit(colName, entry.slice(idx1 + 9, -1), mapTypeToText[type]);
+                this.emit(colName, JSON.parse(entry.toString()).data, mapTypeToText[type]);
             };
 
             const ticktock = () => {
                 if (this._stopped) return;
 
                 this.req.get({path:`${this._loggerFollowPath}?from=${lastLogTick}`}, (status, headers, body) => {
+                    if (status === 0) {
+                        return setTimeout(ticktock, 500);
+                    }
                     if (204 < status || 0 === status) {
                         this.emit('error', new Error('E_LOGGERFOLLOW'), status, headers, body);
                         this.stop();
@@ -130,13 +143,14 @@ class ArangoChair extends EventEmitter {
                         // transaction   {"tick":"514132959101","type":2200,"tid":"514132959099","database":"1"}
                         // insert/update {"tick":"514092205556","type":2300,"tid":"0","database":"1","cid":"513417247371","cname":"test","data":{"_id":"test/testkey","_key":"testkey","_rev":"514092205554",...}}
                         // delete        {"tick":"514092206277","type":2302,"tid":"0","database":"1","cid":"513417247371","cname":"test","data":{"_key":"abcdef","_rev":"514092206275"}}
-
-                        idx0 = entry.indexOf(typeStartBuffer) + 6;            // find type":
+                        
+                        idx0 = entry.lastIndexOf(typeStartBuffer) + 6;            // find type":
                         idx1 = entry.indexOf(commaDoubleTickBuffer, idx0);    // find ,"
                         type = entry.slice(idx0, idx1).toString();
 
-                        idx0 = entry.indexOf(commaDoubleTickBuffer, idx1+8) - 1; // find ,"
-                        tid  = entry.slice(idx1+8, idx0).toString();
+                        idx0 = entry.indexOf(tidBuffer) + 6;
+                        idx1 = entry.indexOf(commaDoubleTickBuffer, idx0);    // find ,"
+                        tid  = entry.slice(idx0, idx1 - 1).toString();
 
                         if ('2200' === type) { // txn start
                             txns.set(tid, new Set());
@@ -156,7 +170,8 @@ class ArangoChair extends EventEmitter {
                             if ('2300' !== type && '2302' !== type) continue;
 
                             if ('0' !== tid) {
-                                txns.get(tid).add([type,entry.slice(idx0+14)]);
+                                var tmp = txns.get(tid);
+                                tmp.add([type,entry]);
                                 continue;
                             } // if
 
