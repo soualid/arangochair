@@ -6,7 +6,6 @@ const https = require('request-easy').https;
 const http  = require('request-easy').http;
 const url  = require('url');
 
-
 const mapTextToType = {
     'insert/update':'2300',
     'delete':'2302'
@@ -16,28 +15,42 @@ const mapTypeToText = {
     '2302': 'delete'
 };
 
-
+var mapShardToCollection = null;
 
 class ArangoChair extends EventEmitter {
-    constructor(adbUrl, auth) {
+    constructor(adbUrl, auth, coordinatorUrl=null, coordinatorAuth=null) {
         super();
         this.adbUrl = url.parse(adbUrl);
         this.options = {
             hostname:this.adbUrl.hostname,
-            port:adbUrl.port
+            port:this.adbUrl.port
         };
         if (auth) {
             this.options.headers = {
-            'Authorization': auth
-          };
+                'Authorization': auth
+            };
         }
 
-        this.req = new (this.adbUrl.protocol === 'https:'? https : http)(this.options);
-
         const db = '/' === this.adbUrl.pathname ? '/_system' : this.adbUrl.pathname;
+        if (coordinatorUrl != null) {
+            this.adbCoordinatorUrl = url.parse(coordinatorUrl);
+            if (coordinatorAuth) {
+
+                this.coordinatorOptions = {
+                    hostname:this.adbCoordinatorUrl.hostname,
+                    port:this.adbCoordinatorUrl.port
+                };
+                this.coordinatorOptions.headers = {
+                    'Authorization': coordinatorAuth
+                };
+            }
+            this._shardDistributionPath = `/_db${db}/_admin/cluster/shardDistribution`;
+        }
+        this.req = new (this.adbUrl.protocol === 'https:'? https : http)(this.options);
 
         this._loggerStatePath  = `/_db${db}/_api/replication/logger-state`;
         this._loggerFollowPath = `/_db${db}/_api/replication/logger-follow`;
+        
 
         this.collectionsMap = new Map();
         this._stopped = false;
@@ -45,7 +58,22 @@ class ArangoChair extends EventEmitter {
 
     start() {
         this._stopped = false;
-        this._startLoggerState();
+        if (this.adbCoordinatorUrl) {
+            var req = new (this.adbCoordinatorUrl.protocol === 'https:'? https : http)(this.coordinatorOptions);
+            req.get({path:this._shardDistributionPath}, (status, headers, body) => {
+                mapShardToCollection = {};
+                var shardplan = JSON.parse(body.toString());
+                for (var collection in shardplan.results) {
+                    var shards = shardplan.results[collection].Current;
+                    for (var shard in shards) {
+                        mapShardToCollection[shard] = collection;
+                    }
+                }
+                this._startLoggerState();
+            });       
+        } else {
+            this._startLoggerState();
+        }     
     }
 
     stop() {
@@ -53,6 +81,7 @@ class ArangoChair extends EventEmitter {
     }
 
     _startLoggerState() {
+
         if (this.req == null) {
             this.req = new (this.adbUrl.protocol === 'https:'? https : http)(this.options);
         }
@@ -92,10 +121,16 @@ class ArangoChair extends EventEmitter {
             const txns = new Map();
 
             const handleEntry = () => {
-                idx0 = entry.indexOf(cnameStartBuffer, idx0 + 2) + 8;
-                idx1 = entry.indexOf(commaDoubleTickBuffer, idx0) - 1;
+                var colName;
 
-                const colName = entry.slice(idx0, idx1).toString();
+                idx0 = entry.indexOf(cnameStartBuffer, idx0 + 2) + 8;
+                idx1 = entry.indexOf(commaDoubleTickBuffer, idx0) - 1;    
+                colName = entry.slice(idx0, idx1).toString();
+
+                if (mapShardToCollection != null) {
+                    // map shard to collection name
+                    colName = mapShardToCollection[colName];
+                }
 
                 const colConf = this.collectionsMap.get(colName);
                 if (undefined === colConf) return;
