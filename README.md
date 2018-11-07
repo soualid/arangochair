@@ -13,9 +13,20 @@ npm install --save arangochair
 ```es6
 const arangochair = require('arangochair');
 
-const no4 = new arangochair('http://127.0.0.1:8529/'); // ArangoDB node to monitor
+// ArangoDB node to monitor
+const no4 = new arangochair('http://127.0.0.1:8529/'); 
 
-const no4 = new arangochair('http://127.0.0.1:8529/myDb'); // ArangoDB node to monitor, with database name
+// ArangoDB node to monitor, with database name
+const no4 = new arangochair('http://127.0.0.1:8529/myDb');
+
+// ArangoDB node to monitor, with database name and password
+const no4 = new arangochair('http://127.0.0.1:8529/myDb', "Basic cm9vdDphYWFhYQ=="); 
+
+// ArangoDB node to monitor, with cluster configuration
+// Coordinator is required to retrieve actual shard plan used to map
+// shard names to corresponding collection names
+const no4 = new arangochair('http://db1:8529/myDb', "Basic cm9vdDphYWFhYQ==", 
+    'http://coordinator1:8529/myDb', "Basic cm9vdDphYWFhYQ=="); 
 
 no4.subscribe({collection:'users'});
 no4.start();
